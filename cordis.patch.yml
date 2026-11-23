@@ -1,0 +1,7 @@
+# dsh-shared-terminal bundle layer: registers three agent tools that operate the
+# person's sidebar terminals (list, type into, read screen). Depends on the web
+# app's terminal-controller entry, which provides the `terminalController`
+# service; this row only adds the model-facing bridge, no new PTYs, no new UI.
+- insert:
+    - id: shared-terminal
+      name: dsh-shared-terminal
