@@ -21,6 +21,9 @@ DSH 内置的两套终端互不相通：
 | `shared_terminal_list` | 列出本 Session 的侧边栏终端（id、标题、shell、目录、尺寸、状态） |
 | `shared_terminal_send` | 向指定终端输入文本（默认回车提交；可 `submit:false` 分段输入）；可等待 shell 空闲后返回当前屏幕 |
 | `shared_terminal_read` | 读取终端当前屏幕（与 UI 显示完全一致），**不抢输入权** |
+| `shared_terminal_rename` | 给终端命名（1–120 字符），标签标题实时更新 |
+
+**按名字引用**：`send`/`read`/`rename` 的 `id` 参数既接受终端 id，也接受**精确 title**——在侧边栏双击标签改名，或让 agent 调 `shared_terminal_rename`；之后直接说「操作 jump-host 终端」即可。title 重名歧义时报错并列出候选 id。
 
 ## 工作方式（安全设计）
 

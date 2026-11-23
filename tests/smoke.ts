@@ -20,6 +20,7 @@ const ctx: any = {
 function makeController() {
 	const writes: string[] = [];
 	let idle = false;
+	let extraInfos: any[] = [];
 	const handle = {
 		write: async (data: string) => { writes.push(data); },
 		inspectActivity: async () => ({ state: idle ? "idle" as const : "busy" as const, revision: writes.length })
@@ -35,14 +36,20 @@ function makeController() {
 	};
 	return {
 		config: { maxInputBytes: 64 * 1024 },
-		list: (sessionId: string) => [terminal.info],
+		list: () => [terminal.info, ...extraInfos],
 		terminal: (_agent: any, id: string) => {
-			if (id !== "term-1") throw new Error("Terminal no longer exists in this Session");
+			const found = [terminal.info, ...extraInfos].find((t) => t.id === id);
+			if (!found) throw new Error("Terminal no longer exists in this Session");
 			return terminal;
+		},
+		rename: (_agent: any, id: string, title: string) => {
+			if (id !== terminal.info.id) throw new Error("Terminal no longer exists in this Session");
+			terminal.info = { ...terminal.info, title };
 		},
 		writes: () => writes,
 		setIdle: (v: boolean) => { idle = v; },
-		wasInvalidated: () => terminal.invalidated > 0
+		wasInvalidated: () => terminal.invalidated > 0,
+		setExtraInfos: (infos: any[]) => { extraInfos = infos; }
 	};
 }
 
@@ -51,7 +58,7 @@ assert.equal(name, "shared-terminal");
 assert.ok(inject.includes("terminalController") && inject.includes("tools") && inject.includes("systemPrompt"), "inject list");
 apply(ctx, config);
 assert.deepEqual(sections.map((s) => s.name), ["tool:shared-terminal"], "system prompt section registered");
-assert.deepEqual(Object.keys(registered).sort(), ["shared_terminal_list", "shared_terminal_read", "shared_terminal_send"], "three tools registered");
+assert.deepEqual(Object.keys(registered).sort(), ["shared_terminal_list", "shared_terminal_read", "shared_terminal_rename", "shared_terminal_send"], "four tools registered");
 
 // -- tool behaviour -----------------------------------------------------------
 const exec = { agent: { id: "sess-1" }, signal: new AbortController().signal };
@@ -87,6 +94,26 @@ assert.equal(render(registered.shared_terminal_read, {}, read), "$ echo hi\nhi\n
 // lines parameter clamps the tail
 const read3 = await registered.shared_terminal_read.execute({ id: "term-1", lines: 1 }, exec);
 assert.equal(render(registered.shared_terminal_read, { lines: 1 }, read3), "$", "lines:1 returns one row");
+
+// rename by title, then reference by the new title
+const renamed = await registered.shared_terminal_rename.execute({ id: "zsh", title: "jump-host" }, exec);
+assert.match(renamed.detail, /renamed to "jump-host"/, "rename reports the new title");
+assert.equal(controller.list()[0].title, "jump-host", "rename mutated the controller info");
+const viaTitle = await registered.shared_terminal_read.execute({ id: "jump-host" }, exec);
+assert.equal(viaTitle.screen, "$ echo hi\nhi\n$ ", "read resolves by title after rename");
+
+// rename rejects empty and oversized titles
+await assert.rejects(() => registered.shared_terminal_rename.execute({ id: "term-1", title: "   " }, exec), /1-120/);
+await assert.rejects(() => registered.shared_terminal_rename.execute({ id: "term-1", title: "x".repeat(121) }, exec), /1-120/);
+
+// ambiguous title lists the candidates
+controller.setExtraInfos([{ id: "term-2", title: "jump-host", shell: { path: "/bin/bash", args: [], name: "bash" }, cwd: "/", cols: 80, rows: 24, state: "running", exitCode: null }]);
+await assert.rejects(
+	() => registered.shared_terminal_read.execute({ id: "jump-host" }, exec),
+	/ambiguous.*term-1.*term-2/s,
+	"ambiguous title error lists candidate ids"
+);
+controller.setExtraInfos([]);
 
 // error paths
 await assert.rejects(() => registered.shared_terminal_send.execute({ id: "nope", text: "x" }, exec), /no longer exists/);

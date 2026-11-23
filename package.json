@@ -1,6 +1,6 @@
 {
   "name": "dsh-shared-terminal",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Shared terminal bridge for the DeepSeek Harness: the sidebar terminals a person drives and the terminal tools an agent drives become one session — the agent lists, types into, and reads the person's terminals; the person watches everything live.",
   "type": "module",

@@ -73,6 +73,7 @@ interface BrowserTerminalLike {
 interface TerminalControllerLike {
 	list(sessionId: string): WebTerminalInfoLike[];
 	terminal(agent: SessionAgent, id: string): BrowserTerminalLike;
+	rename(agent: SessionAgent, id: string, title: string): void;
 	readonly config: { readonly maxInputBytes: number };
 }
 
@@ -120,13 +121,23 @@ function screenTail(screen: string, lines: number): string {
 //#region controller access
 
 /**
- * Resolve one committed sidebar terminal. The controller's `terminal` accessor
- * is TS-private but a plain prototype method, and it applies the controller's
- * own Session ownership and closed-id checks before returning the terminal.
+ * Resolve one committed sidebar terminal by id **or** exact title (so the
+ * person can say "operate the jump terminal" instead of quoting a UUID).
+ * Exact-id wins; an ambiguous title is refused with the candidates listed.
  */
 function resolveTerminal(controller: TerminalControllerLike, agent: SessionAgent, id: string): BrowserTerminalLike {
 	if (typeof id !== "string" || id.length === 0) throw new Error("id must be a non-empty string");
-	return controller.terminal(agent, id);
+	try {
+		return controller.terminal(agent, id);
+	} catch (error) {
+		const byTitle = controller.list(agent.id).filter((t) => t.title === id || t.id === id);
+		if (byTitle.length === 1) return controller.terminal(agent, byTitle[0]!.id);
+		if (byTitle.length > 1) {
+			const candidates = byTitle.map((t) => `${t.id} (${t.title})`).join(", ");
+			throw new Error(`terminal title "${id}" is ambiguous — pick one id: ${candidates}`);
+		}
+		throw error;
+	}
 }
 
 /** Render the terminal's current screen exactly as the sidebar would, without taking input control. */
@@ -163,7 +174,7 @@ function apply(ctx: any, config: { maxResultBytes?: number; sendWaitMs?: number 
 	ctx.systemPrompt.section({
 		name: "tool:shared-terminal",
 		order: ctx.systemPrompt.getSectionOrder("TOOL_PTY"),
-		text: "The person's sidebar terminals are shared with you: shared_terminal_list shows them, shared_terminal_send types into them, shared_terminal_read reads their screen. Use these when the person asks you to take over a terminal they prepared (such as one already logged into a jump host); everything you type appears live in their tab, and every read reflects exactly what they see. The person types passwords and one-time codes themselves — never ask for or send credentials through these tools. For your own private shell state use terminal_open instead."
+		text: "The person's sidebar terminals are shared with you: shared_terminal_list shows them, shared_terminal_send types into them, shared_terminal_read reads their screen, shared_terminal_rename gives a tab a memorable name (the person can also rename by double-clicking the tab title). Every tool accepts the terminal id or its exact title. Use these when the person asks you to take over a terminal they prepared (such as one already logged into a jump host); everything you type appears live in their tab, and every read reflects exactly what they see. The person types passwords and one-time codes themselves — never ask for or send credentials through these tools. For your own private shell state use terminal_open instead."
 	});
 
 	const LIST_SCHEMA = {
@@ -232,13 +243,50 @@ function apply(ctx: any, config: { maxResultBytes?: number; sendWaitMs?: number 
 	}));
 
 	ctx.tools.register(defineTool({
+		name: "shared_terminal_rename",
+		description: "Rename one of the person's sidebar terminals (1-120 chars); the tab title updates live. Name terminals after what they are used for (e.g. \"jump-host\", \"prod-db\") so the person and you can reference them by title in every other shared_terminal_* tool.",
+		parameters: {
+			id: {
+				type: "string",
+				required: true,
+				description: "Terminal id or exact current title from shared_terminal_list."
+			},
+			title: {
+				type: "string",
+				required: true,
+				description: "Non-empty display name, at most 120 characters."
+			}
+		},
+		finalizeContent,
+		output: {
+			schema: SEND_SCHEMA,
+			render: (_args, value: { detail: string; screen: string }) => [{
+				type: "text",
+				text: boundText(value.detail, maxResultBytes)
+			}]
+		},
+		async execute(args, exec) {
+			const trimmed = args.title.trim();
+			if (trimmed.length === 0 || trimmed.length > 120) throw new Error("title must be 1-120 characters after trimming");
+			const terminal = resolveTerminal(controller, exec.agent, args.id);
+			controller.rename(exec.agent, terminal.info.id, trimmed);
+			return { detail: `terminal ${terminal.info.id} renamed to "${trimmed}" — reference it by title in shared_terminal_send/read`, screen: "" };
+		},
+		presentCall: (args: { id: string; title: string }) => ({
+			card: "generic",
+			title: `Rename ${args.id} → ${args.title}`,
+			kind: "execute"
+		})
+	}));
+
+	ctx.tools.register(defineTool({
 		name: "shared_terminal_send",
 		description: "Type text into one of the person's sidebar terminals, as if at their keyboard; the person sees it live. Enter is submitted by default. Optionally waits for the shell to look idle again, then returns the current screen.",
 		parameters: {
 			id: {
 				type: "string",
 				required: true,
-				description: "Terminal id from shared_terminal_list."
+				description: "Terminal id or exact title from shared_terminal_list."
 			},
 			text: {
 				type: "string",
@@ -296,7 +344,7 @@ function apply(ctx: any, config: { maxResultBytes?: number; sendWaitMs?: number 
 			id: {
 				type: "string",
 				required: true,
-				description: "Terminal id from shared_terminal_list."
+				description: "Terminal id or exact title from shared_terminal_list."
 			},
 			lines: {
 				type: "integer",
